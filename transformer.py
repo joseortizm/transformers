@@ -22,8 +22,6 @@ class PositionalEmbedding(nn.Module):
     div_term:  10000^(2i/d_model)
     pos_embed_matrix[:, 0::2]: even
     pos_embed_matrix[:, 1::2]: odd
-    pos_embed_matrix:
-
 
     """
 
@@ -43,10 +41,149 @@ class PositionalEmbedding(nn.Module):
         return x + self.pos_embed_matrix[:x.size(0), :]
         
 
+class MultiHeadAttention(nn.Module):
+    """
+    An attention function can be described as mapping a query and a set of key-value pairs to an output, 
+    where the query, keys, values, and output are all vectors. The output is computed as a weighted sum
+    of the values, where the weight assigned to each value is computed by a compatibility function of 
+    the query with the corresponding key.
+
+
+    In this work we employ h = 8 parallel attention layers, or heads. 
+    For each of these we use dk = dv = dmodel/h = 64. 
+    
+    Q: Queries
+    K: Keys
+    V: Values
+    Q, K and V: [batch_size, seq_len, d_model]
+
+    d_v, d_k: dimension of each head
+
+
+    W_q, W_k, W_v, W_o: - weights
+                        - dimensions: if d_model = 512 and num_heads = 8 so dimensions for head is 512/8 = 64
+                            -> 8*(512,64) connections is = 512,512
+
+
+
+    """ 
+    def __init__(self, d_model = 512, num_heads = 8):
+        super().__init__()
+        assert d_model % num_heads == 0, 'Embedding size not compatible with num heads'
+
+        self.d_v = d_model // num_heads
+        self.d_k = self.d_v  #d_model // num_heads
+        self.num_heads = num_heads
+        
+        self.W_q = nn.Linear(d_model, d_model)
+        self.W_k = nn.Linear(d_model, d_model)
+        self.W_v = nn.Linear(d_model, d_model)
+        self.W_o = nn.Linear(d_model, d_model)
+    
+    def forward(self, Q, K, V, mask = None):
+        """
+        batch_size: examples for batch
+        Q, K and V: organizationi and data preparation for each head ->[batch_size, num_heads, seq_len, d_k]
+        
+        attention: the relevance or importance of each token in the input sequence relative to other tokens
+                   the tensor that contains the calculated attention probabilities.
+        weighted_values: is the final result of the attention mechanism after applying the attention scores to the values (V)
+                         the tensor that contains the weighted values calculated using the attention probabilities.
+                          = attention * V
+
+
+        """
+        
+        batch_size = Q.size(0)
+        Q = self.W_q(Q).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+        K = self.W_k(K).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+        V = self.W_v(V).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2) 
+
+        weighted_values, attention = self.scale_dot_product(Q, K, V, mask)
+        #weighted_values = weighted_values.transpose(1, 2).contiguous().view(batch_size, -1, self.num_heads*self.d_k)
+        weighted_values = self.W_o(weighted_values)
+        
+        return weighted_values, attention
+
+
+
+
+    
+    def scale_dot_product(self, Q, K, V, mask = None):
+        """
+        Attention(Q, K, V ) = softmax( (Q*K^T) / (dk)^(1/2) ) * V
+        
+        """
+
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, -1e9)
+        attention = F.softmax(scores, dim = -1)
+        weighted_values = torch.matmul(attention, V)
+        return weighted_values, attention
+
+
+
+
+class PositionFeedForward(nn.Module):
+    """
+    In addition to attention sub-layers, each of the layers in our encoder and decoder contains a fully connected 
+    feed-forward network, which is applied to each position separately and identically. This consists of 
+    two linear transformations with a ReLU activation in between.
+    
+    While the linear transformations are the same across different positions, they use different parameters from 
+    layer to layer.
+    """
+    def __init__(self, d_model, d_ff):
+        super().__init__()
+        self.linear1 = nn.Linear(d_model, d_ff)
+        self.linear2 = nn.Linear(d_ff, d_model)
+        
+    def forward(self, x):
+        return self.linear2(F.relu(self.linear1(x)))
+
+
+
+class EncoderSubLayer(nn.Module):
+    """
+    Residual Dropout: We apply dropout to the output of each sub-layer, 
+    before it is added to the sub-layer input and normalized. In addition, we apply dropout 
+    to the sums of the embeddings and the positional encodings in both the encoder and decoder stacks. 
+    For the base model, we use a rate of Pdrop = 0.1.
+
+
+    """
+    def __init__(self, d_model, num_heads, d_ff, dropout = 0.1):
+        super().__init__()
+        self.self_attn = MultiHeadAttention(d_model, num_heads)
+        self.ffn = PositionFeedForward(d_model, d_ff)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.droupout1 = nn.Dropout(dropout)
+        self.droupout2 = nn.Dropout(dropout)
+
+    def forward(self, x, mask=None):
+        """
+        Multi-Head Attention is once in Encoder and twice in Decoder so you can use one or two Multi-Head Attetion 
+        (Encoder and Decoder). in this code one Multi-Head Attention class so:
+            Multi-Head Attention needs Q, K and V so for this implementation three X will be used in self.self_attn().
+       
+       
+        """
+        attention_score, _ = self.self_attn(x, x, x, mask)
+        x = x + self.droupout1(attention_score)
+        x = self.norm1(x)
+        x = x + self.droupout2(self.ffn(x))
+        return self.norm2(x)
+
 
 class Encoder(nn.Module):
+    """
+
+    """
     def __init__(self, d_model, num_heads, d_ff, num_layers, dropout=0.1):
-        pass
+        super().__init__()
+
 
     def forward(self, x, mask=None):
         pass
