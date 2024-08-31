@@ -48,6 +48,13 @@ class MultiHeadAttention(nn.Module):
     of the values, where the weight assigned to each value is computed by a compatibility function of 
     the query with the corresponding key.
 
+    MultiHead(Q, K, V) = Concat(head1, head2, ...headh)* W_o
+    Where headi = Attention(W_q(Q) , W_k(K) , W_v(V)) 
+
+    (Linear Projection of Queries, Keys, and Values:)
+    W_q(Q): projected queries for head i
+    W_k(K): Projected keys for head i
+    W_v(V): Projected values for head i
 
     In this work we employ h = 8 parallel attention layers, or heads. 
     For each of these we use dk = dv = dmodel/h = 64. 
@@ -91,30 +98,39 @@ class MultiHeadAttention(nn.Module):
                          the tensor that contains the weighted values calculated using the attention probabilities.
                           = attention * V
 
+        Note:
+            weighted_values = weighted_values.transpose(1, 2).contiguous().view(batch_size, -1, self.num_heads*self.d_k)
+            
+            1)This operation is essential for the concatenation of the outputs from all the attention heads, 
+            allowing the model to effectively combine and utilize the information extracted by each head
+            before the final projection:
+            Transposition: Reorganizes the dimensions to facilitate concatenation.
+            Contiguity: Ensures that the tensor is contiguous in memory, allowing for efficient manipulation.
+            Reshaping: Combines the outputs of the attention heads into a single feature dimension.
 
+            2)is indeed used to revert the changes made during the transformation of 
+            the input tensors (queries, keys, and values) in the earlier part of the code:
+
+            Q = self.W_q(Q).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+            K = self.W_k(K).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+            V = self.W_v(V).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         """
-        
         batch_size = Q.size(0)
         Q = self.W_q(Q).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         K = self.W_k(K).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         V = self.W_v(V).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2) 
 
         weighted_values, attention = self.scale_dot_product(Q, K, V, mask)
-        #weighted_values = weighted_values.transpose(1, 2).contiguous().view(batch_size, -1, self.num_heads*self.d_k)
+        weighted_values = weighted_values.transpose(1, 2).contiguous().view(batch_size, -1, self.num_heads*self.d_k)
         weighted_values = self.W_o(weighted_values)
         
         return weighted_values, attention
 
-
-
-
-    
     def scale_dot_product(self, Q, K, V, mask = None):
         """
         Attention(Q, K, V ) = softmax( (Q*K^T) / (dk)^(1/2) ) * V
         
         """
-
         scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
         if mask is not None:
             scores = scores.masked_fill(mask == 0, -1e9)
@@ -130,7 +146,9 @@ class PositionFeedForward(nn.Module):
     In addition to attention sub-layers, each of the layers in our encoder and decoder contains a fully connected 
     feed-forward network, which is applied to each position separately and identically. This consists of 
     two linear transformations with a ReLU activation in between.
-    
+
+    FFN(x) = max(0, xW1 + b1)W2 + b2   
+
     While the linear transformations are the same across different positions, they use different parameters from 
     layer to layer.
     """
@@ -150,8 +168,6 @@ class EncoderSubLayer(nn.Module):
     before it is added to the sub-layer input and normalized. In addition, we apply dropout 
     to the sums of the embeddings and the positional encodings in both the encoder and decoder stacks. 
     For the base model, we use a rate of Pdrop = 0.1.
-
-
     """
     def __init__(self, d_model, num_heads, d_ff, dropout = 0.1):
         super().__init__()
@@ -167,8 +183,6 @@ class EncoderSubLayer(nn.Module):
         Multi-Head Attention is once in Encoder and twice in Decoder so you can use one or two Multi-Head Attetion 
         (Encoder and Decoder). in this code one Multi-Head Attention class so:
             Multi-Head Attention needs Q, K and V so for this implementation three X will be used in self.self_attn().
-       
-       
         """
         attention_score, _ = self.self_attn(x, x, x, mask)
         x = x + self.droupout1(attention_score)
@@ -179,20 +193,63 @@ class EncoderSubLayer(nn.Module):
 
 class Encoder(nn.Module):
     """
-
+    layers: Encoder layers (Nx = 6)
+    norm: Layer Normalization (optional: If you want to further stabilize the final output of the Encoder, you can keep the final normalization)
     """
     def __init__(self, d_model, num_heads, d_ff, num_layers, dropout=0.1):
         super().__init__()
-
+        self.layers = nn.ModuleList([EncoderSubLayer(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)])
+        self.norm = nn.LayerNorm(d_model)
 
     def forward(self, x, mask=None):
-        pass
+        for layer in self.layers:
+            x = layer(x, mask)
+        return self.norm(x)
+
+
+class DecoderSubLayer(nn.Module):
+    """
+    attention_score: first sub-layer
+    cross_attn (Cross-Attention): second sub-layer
+    """
+   def __init__(self, d_model, num_heads, d_ff, num_layers, dropout=0.1):
+        super().__init__()
+        self.self_attn = MultiHeadAttention(d_model, num_heads)
+        self.cross_attn = MultiHeadAttention(d_model, num_heads)
+        self.feed_forward = PositionFeedForward(d_model, d_ff)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        self.dropout3 = nn.Dropout(dropout)
+
+    def forward(self, x, encoder_output, target_mask=None, encoder_mask=None):
+        attention_score, _ = self.self_attn(x, x, x, target_mask)
+        x = x + self.dropout1(attention_score)
+        x = self.norm1(x) #go down to self.cross_attn()
+        
+        encoder_attn, _ = self.cross_attn(x, encoder_output, encoder_output, encoder_mask)
+        x = x + self.dropout2(encoder_attn)
+        x = self.norm2(x)
+        
+        ff_output = self.feed_forward(x)
+        x = x + self.dropout3(ff_output)
+        return self.norm3(x)
+
+
 
 class Decoder(nn.Module):
-    def __init__(self, d_model, num_heads, d_ff, num_layers, dropout=0.1):
-        pass
+    """
+    layers: Decoder layers (Nx = 6)
+    norm: Layer Normalization (optional: If you want to further stabilize the final output of the Decoder, you can keep the final normalization)
+    """
+     def __init__(self, d_model, num_heads, d_ff, num_layers, dropout=0.1):
+        super().__init__()
+        self.layers = nn.ModuleList([DecoderSubLayer(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)])
+        self.norm = nn.LayerNorm(d_model)
 
-    def forward(self, x, encoder_output, target_mask=None, encoder_mask=None):  
+    def forward(self, x, encoder_output, target_mask, encoder_mask):  
         """
         -
         x: "outputs(shifted right)" (parcial)
@@ -207,8 +264,9 @@ class Decoder(nn.Module):
 
 
         """
-        pass
-
+        for layer in self.layers:
+            x = layer(x, encoder_output, target_mask, encoder_mask)
+        return self.norm(x)
 
 class Transformer(nn.Module):
     """
