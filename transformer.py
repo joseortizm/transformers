@@ -13,7 +13,7 @@ else:
     device = torch.device("cpu")
 
 
-#MAX_SEQ_LEN = 30 #128
+MAX_SEQ_LEN = 128
 
 class PositionalEmbedding(nn.Module):
     """
