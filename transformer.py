@@ -17,21 +17,24 @@ MAX_SEQ_LEN = 128
 
 class PositionalEmbedding(nn.Module):
     """
-    pos_embed_matrix: rows is max sequence (in sentence), col is d_model (numbre of elements in embedding)
-                      default to all zeros
+    Positional Encoding (Attention Is All You Need): https://arxiv.org/abs/1706.03762
 
-    token_pos: token position
-    div_term:  10000^(2i/d_model)
-    pos_embed_matrix[:, 0::2]: even
-    pos_embed_matrix[:, 1::2]: odd
+        pos_embed_matrix: rows is max sequence (in sentence), col is d_model (numbre of elements in embedding)
+                          default to all zeros
 
+        token_pos: token position
+        div_term:  10000^(2i/d_model)
+        pos_embed_matrix[:, 0::2]: even
+        pos_embed_matrix[:, 1::2]: odd
     """
 
     def __init__(self, d_model, max_seq_len = MAX_SEQ_LEN):
         super().__init__()
         self.pos_embed_matrix = torch.zeros(max_seq_len, d_model, device=device)
+
         token_pos = torch.arange(0, max_seq_len, dtype = torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0)/d_model))
+
         self.pos_embed_matrix[:, 0::2] = torch.sin(token_pos * div_term)
         self.pos_embed_matrix[:, 1::2] = torch.cos(token_pos * div_term)
         self.pos_embed_matrix = self.pos_embed_matrix.unsqueeze(0).transpose(0,1)
@@ -45,6 +48,8 @@ class PositionalEmbedding(nn.Module):
 
 class MultiHeadAttention(nn.Module):
     """
+    Multi-Head Attention (Attention Is All You Need): https://arxiv.org/abs/1706.03762 
+
     An attention function can be described as mapping a query and a set of key-value pairs to an output, 
     where the query, keys, values, and output are all vectors. The output is computed as a weighted sum
     of the values, where the weight assigned to each value is computed by a compatibility function of 
@@ -68,13 +73,9 @@ class MultiHeadAttention(nn.Module):
 
     d_v, d_k: dimension of each head
 
-
     W_q, W_k, W_v, W_o: - weights
                         - dimensions: if d_model = 512 and num_heads = 8 so dimensions for head is 512/8 = 64
                             -> 8*(512,64) connections is = 512,512
-
-
-
     """ 
     def __init__(self, d_model = 512, num_heads = 8):
         super().__init__()
@@ -92,10 +93,12 @@ class MultiHeadAttention(nn.Module):
     def forward(self, Q, K, V, mask = None):
         """
         batch_size: examples for batch
+
         Q, K and V: organizationi and data preparation for each head ->[batch_size, num_heads, seq_len, d_k]
         
-        attention: the relevance or importance of each token in the input sequence relative to other tokens
+        Attention: the relevance or importance of each token in the input sequence relative to other tokens
                    the tensor that contains the calculated attention probabilities.
+        
         weighted_values: is the final result of the attention mechanism after applying the attention scores to the values (V)
                          the tensor that contains the weighted values calculated using the attention probabilities.
                           = attention * V
@@ -106,9 +109,9 @@ class MultiHeadAttention(nn.Module):
             1)This operation is essential for the concatenation of the outputs from all the attention heads, 
             allowing the model to effectively combine and utilize the information extracted by each head
             before the final projection:
-            Transposition: Reorganizes the dimensions to facilitate concatenation.
-            Contiguity: Ensures that the tensor is contiguous in memory, allowing for efficient manipulation.
-            Reshaping: Combines the outputs of the attention heads into a single feature dimension.
+                Transposition: Reorganizes the dimensions to facilitate concatenation.
+                Contiguity: Ensures that the tensor is contiguous in memory, allowing for efficient manipulation.
+                Reshaping: Combines the outputs of the attention heads into a single feature dimension.
 
             2)is indeed used to revert the changes made during the transformation of 
             the input tensors (queries, keys, and values) in the earlier part of the code:
@@ -130,8 +133,7 @@ class MultiHeadAttention(nn.Module):
 
     def scale_dot_product(self, Q, K, V, mask = None):
         """
-        Attention(Q, K, V ) = softmax( (Q*K^T) / (dk)^(1/2) ) * V
-        
+        Attention(Q, K, V) = softmax( (Q*K^T) / (dk)^(1/2) ) * V
         """
         scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
         if mask is not None:
@@ -140,11 +142,10 @@ class MultiHeadAttention(nn.Module):
         weighted_values = torch.matmul(attention, V)
         return weighted_values, attention
 
-
-
-
 class PositionFeedForward(nn.Module):
     """
+     Position-wise Feed-Forward Networks (Attention Is All You Need): https://arxiv.org/abs/1706.03762
+
     In addition to attention sub-layers, each of the layers in our encoder and decoder contains a fully connected 
     feed-forward network, which is applied to each position separately and identically. This consists of 
     two linear transformations with a ReLU activation in between.
@@ -162,14 +163,12 @@ class PositionFeedForward(nn.Module):
     def forward(self, x):
         return self.linear2(F.relu(self.linear1(x)))
 
-
-
 class EncoderSubLayer(nn.Module):
     """
     Residual Dropout: We apply dropout to the output of each sub-layer, 
-    before it is added to the sub-layer input and normalized. In addition, we apply dropout 
-    to the sums of the embeddings and the positional encodings in both the encoder and decoder stacks. 
-    For the base model, we use a rate of Pdrop = 0.1.
+                    before it is added to the sub-layer input and normalized. In addition, we apply dropout 
+                    to the sums of the embeddings and the positional encodings in both the encoder and decoder stacks. 
+                    For the base model, we use a rate of Pdrop = 0.1.
     """
     def __init__(self, d_model, num_heads, d_ff, dropout = 0.1):
         super().__init__()
@@ -183,7 +182,8 @@ class EncoderSubLayer(nn.Module):
     def forward(self, x, mask=None):
         """
         Multi-Head Attention is once in Encoder and twice in Decoder so you can use one or two Multi-Head Attetion 
-        (Encoder and Decoder). in this code one Multi-Head Attention class so:
+        (Encoder and Decoder). 
+        In this code one Multi-Head Attention class so:
             Multi-Head Attention needs Q, K and V so for this implementation three X will be used in self.self_attn().
         """
         attention_score, _ = self.self_attn(x, x, x, mask)
@@ -253,18 +253,15 @@ class Decoder(nn.Module):
 
     def forward(self, x, encoder_output, target_mask, encoder_mask):  
         """
-        -
-        x: "outputs(shifted right)" (parcial)
-        
-        - 
+        x: "outputs(shifted right)" 
         encoder_output: output of Encoder
-
         
-        Mask: We also modify the self-attention sub-layer in the decoder stack to prevent positions from attending to subsequent positions. This masking, combined with fact that the output embeddings are offset by one position, ensures that the predictions for position i can depend only on the known outputs at positions less than i.
-        -
+        Mask: We also modify the self-attention sub-layer in the decoder stack to prevent positions 
+        from attending to subsequent positions. This masking, combined with fact that the output 
+        embeddings are offset by one position, ensures that the predictions for position i can 
+        depend only on the known outputs at positions less than i.
+        
         target_mask (Masked Multi-Head Attention), encoder_mask (mask for encoder. e.g. don't pay attention to paddings)
-
-
         """
         for layer in self.layers:
             x = layer(x, encoder_output, target_mask, encoder_mask)
@@ -272,61 +269,53 @@ class Decoder(nn.Module):
 
 class Transformer(nn.Module):
     """
+    Args:
+        d_model: the number of expected features in the encoder/decoder inputs (default=512).
+                To facilitate these residual connections, all sub-layers in the model, 
+                as well as the embedding layers, produce outputs of dimension dmodel = 512.
    
-    xxx: pytorch name and descrip pytorch
-    xxx: video name and descrip paper 
+        num_heads: the number of heads in the multiheadattention models (default=8).
+                  In this work we employ h = 8 parallel attention layers, or heads.
     
-    d_model: the number of expected features in the encoder/decoder inputs (default=512).
-    d_model: To facilitate these residual connections, all sub-layers in the model, 
-    as well as the embedding layers, produce outputs of dimension dmodel = 512.
-   
-    nhead: the number of heads in the multiheadattention models (default=8).
-    num_heads: In this work we employ h = 8 parallel attention layers, or heads.
+        d_ff (dim_feedforward): the dimension of the feedforward network model (default=2048).
+                                The inner-layer has dimensionality = 2048.
     
-
-    dim_feedforward: the dimension of the feedforward network model (default=2048).
-    d_ff: ... and the inner-layer has dimensionality dff = 2048.
-
-    -
-    encoder_embedding is Input Embedding / decoder_embedding is Output Enbedding
-    
-    num_encoder_layers: the number of sub-encoder-layers in the encoder (default=6).
-    num_decoder_layers: the number of sub-decoder-layers in the decoder (default=6).
-    num_layers: The encoder is composed of a stack of N = 6 identical layers. 
+        num_layers: The encoder is composed of a stack of N = 6 identical layers. 
                 The decoder is also composed of a stack of N = 6 identical layers.
+                in Pytorch (https://pytorch.org/docs/stable/generated/torch.nn.Transformer.html):
+                    num_encoder_layers: the number of sub-encoder-layers in the encoder (default=6).
+                    num_decoder_layers: the number of sub-decoder-layers in the decoder (default=6).
 
-    input_vocab_sizes: size of dictionary (english origin language)
-    target_vocab_size: size of dictionary
-                       output_layer = nn.Linear(...)->probability distribution for each word of the target language
+        input_vocab_sizes: size of dictionary (english origin language)
 
+        target_vocab_size: size of dictionary
+
+        max_len: max number of tokens in a statement
+
+        dropout: For the base model, we use a rate of Pdrop = 0.1
     -
-    max_len: max number of tokens in a statement
-
-    -
-    dropout: For the base model, we use a rate of Pdrop = 0.1
-
     """
+
     def __init__(self, d_model, num_heads, d_ff, num_layers, input_vocab_size, 
     target_vocab_size, max_len=MAX_SEQ_LEN, dropout=0.1):
         super().__init__()
-        self.encoder_embedding = nn.Embedding(input_vocab_size, d_model)
-        self.decoder_embedding = nn.Embedding(target_vocab_size, d_model)
-        self.pos_embedding = PositionalEmbedding(d_model, max_len) #Positional Encoding (paper)
+        self.encoder_embedding = nn.Embedding(input_vocab_size, d_model) # Input Embedding
+        self.decoder_embedding = nn.Embedding(target_vocab_size, d_model) # Output Embedding
+        self.pos_embedding = PositionalEmbedding(d_model, max_len) # Positional Encoding (paper)
         self.encoder = Encoder(d_model, num_heads, d_ff, num_layers, dropout)
         self.decoder = Decoder(d_model, num_heads, d_ff, num_layers, dropout)
-        self.output_layer = nn.Linear(d_model, target_vocab_size) #d_model: number of elements passed in the layers 
+        self.output_layer = nn.Linear(d_model, target_vocab_size) # d_model: number of elements passed in the layers 
 
     
     def forward(self, source, target):
         """
-        source: 1)Input Embedding, 2)Positional Encoding
-        1)  In the embedding layers, we multiply those weights by square root of d_model
-        self.encoder_embedding(source) * math.sqrt(self.encoder_embedding.embedding_dim)
-        where self.encoder_embedding.embedding_dim is d_model doc: https://pytorch.org/docs/stable/generated/torch.nn.Embedding.html#embedding
-        2) self.pos_embedding(source) 
+        Input Embedding:  In the embedding layers, we multiply those weights by square root of d_model
+                        >>> self.encoder_embedding(source) * math.sqrt(self.encoder_embedding.embedding_dim)
+                        where self.encoder_embedding.embedding_dim is d_model: https://pytorch.org/docs/stable/generated/torch.nn.Embedding.html#embedding
 
-        target: 1)Output Embedding, 2)Positional Encoding
+        Positional Encoding: class PositionalEmbedding()
 
+        same for target
         """
         source_mask, target_mask = self.mask(source, target)
 
@@ -337,14 +326,13 @@ class Transformer(nn.Module):
         target = self.decoder_embedding(target) * math.sqrt(self.decoder_embedding.embedding_dim)
         target = self.pos_embedding(target)
         output = self.decoder(target, encoder_output, target_mask, source_mask) #Create Decoder. source_mask is encoder_mask 
-
+        # use of softmax will be performed during training
         return self.output_layer(output)
 
 
     def mask(self, source, target):
         """
-        generate mask
-        
+        Generate mask for Transformer
         """
         source_mask = (source != 0).unsqueeze(1).unsqueeze(2)
         target_mask = (target != 0).unsqueeze(1).unsqueeze(2)
@@ -352,34 +340,3 @@ class Transformer(nn.Module):
         no_mask = torch.tril(torch.ones((1, size, size), device=device)).bool() #elements on and below the main diagonal are True, and elements above are False.
         target_mask = target_mask & no_mask #True only at positions where both (target_mask and no_mask) are True.
         return source_mask, target_mask
-
-
-"""
-#check Transformers():
-
-seq_len_source = 10
-seq_len_target = 10
-batch_size = 2
-input_vocab_size = 50
-target_vocab_size = 50
-
-source = torch.randint(1, input_vocab_size, (batch_size, seq_len_source))
-target = torch.randint(1, target_vocab_size, (batch_size, seq_len_target))
-
-d_model = 512
-num_heads = 8
-d_ff = 2048
-num_layers = 6
-
-model = Transformer(d_model, num_heads, d_ff, num_layers, input_vocab_size, target_vocab_size, max_len=MAX_SEQ_LEN, dropout=0.1)
-
-model = model.to(device)
-source = source.to(device)
-target = target.to(device)
-
-output = model(source, target)
-
-# Expected output shape -> [batch, seq_len_target, target_vocab_size] i.e. [2, 10, 50]
-print(f'ouput.shape {output.shape}')
-#ouput.shape torch.Size([2, 10, 50])
-"""
