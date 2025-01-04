@@ -13,3 +13,6 @@ Transformer model for educational purposes.
 - test.py
 - Notebook `translate.ipynb`
 
+## Todo
+
+-  BLEU
